@@ -680,6 +680,11 @@ ADD_ASSIMP_IMPORTER( MMD
   MMDVmdParser.h
 )
 
+ADD_ASSIMP_IMPORTER( D3D
+  D3DImporter.cpp
+  D3DImporter.h
+)
+
 SET( Step_SRCS
   StepExporter.h
   StepExporter.cpp
