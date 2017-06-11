@@ -50,6 +50,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // internal headers
 #include "D3DImporter.h"
 #include "StreamReader.h"
+#include "ConvertToLHProcess.h"
 #include <memory>
 #include <assimp/IOSystem.hpp>
 #include <assimp/scene.h>
@@ -125,31 +126,42 @@ void D3DImporter::InternReadFile( const std::string& pFile,
     pScene->mRootNode->mMeshes[0] = 0;
 
     aiMesh *mesh = pScene->mMeshes[0] = new aiMesh;
-    mesh->mNumVertices = verticeCount;
-    mesh->mVertices = new aiVector3D[verticeCount];
-    mesh->mNormals = new aiVector3D[verticeCount];
+    mesh->mNumVertices = faceCount * 3;
+    mesh->mVertices = new aiVector3D[mesh->mNumVertices];
+    mesh->mNormals = new aiVector3D[mesh->mNumVertices];
     mesh->mNumUVComponents[0] = 2;
-    mesh->mTextureCoords[0] = new aiVector3D[verticeCount];
+    mesh->mTextureCoords[0] = new aiVector3D[mesh->mNumVertices];
     if (hasColors)
-      mesh->mColors[0] = new aiColor4D[verticeCount];
+        mesh->mColors[0] = new aiColor4D[mesh->mNumVertices];
+
+    std::vector<aiVector3D> vertices;
+    std::vector<aiVector3D> normals;
+    std::vector<aiVector3D> uvs;
+    std::vector<aiColor4D> colors;
 
     for (long v = 0; v < verticeCount; v++) {
-        mesh->mVertices[v].x = stream.GetF4();
-        mesh->mVertices[v].y = stream.GetF4();
-        mesh->mVertices[v].z = stream.GetF4();
+        aiVector3D vec, norm, uv;
+        aiColor4D color;
+        vec.x = stream.GetF4();
+        vec.y = stream.GetF4();
+        vec.z = stream.GetF4();
+	vertices.push_back(vec);
 
-        mesh->mNormals[v].x = stream.GetF4();
-        mesh->mNormals[v].y = stream.GetF4();
-        mesh->mNormals[v].z = stream.GetF4();
+        norm.x = stream.GetF4();
+        norm.y = stream.GetF4();
+        norm.z = stream.GetF4();
+	normals.push_back(norm);
 
-        mesh->mTextureCoords[0][v].x = stream.GetF4();
-        mesh->mTextureCoords[0][v].y = stream.GetF4();
+        uv.x = stream.GetF4();
+        uv.y = stream.GetF4();
+	uvs.push_back(uv);
 
         if (hasColors) {
-          mesh->mColors[0][v].r = stream.GetF4();
-          mesh->mColors[0][v].g = stream.GetF4();
-          mesh->mColors[0][v].b = stream.GetF4();
-          mesh->mColors[0][v].a = stream.GetF4();
+            color.r = stream.GetF4();
+            color.g = stream.GetF4();
+            color.b = stream.GetF4();
+            color.a = stream.GetF4();
+	    colors.push_back(color);
 	}
 
         stream.GetI1(); // flags?
@@ -158,17 +170,45 @@ void D3DImporter::InternReadFile( const std::string& pFile,
     mesh->mNumFaces = faceCount;
     mesh->mFaces = new aiFace[faceCount];
 
+    long outV = 0;
     for (long t = 0; t < faceCount; t++) {
         mesh->mFaces[t].mNumIndices = 3;
         mesh->mFaces[t].mIndices = new unsigned int[3];
+        mesh->mFaces[t].mIndices[0] = outV + 0;
+        mesh->mFaces[t].mIndices[1] = outV + 1;
+        mesh->mFaces[t].mIndices[2] = outV + 2;
 
-        mesh->mFaces[t].mIndices[0] = stream.GetI2();
-        mesh->mFaces[t].mIndices[1] = stream.GetI2();
-        mesh->mFaces[t].mIndices[2] = stream.GetI2();
+        unsigned int a, b, c;
+        a = stream.GetI2();
+        b = stream.GetI2();
+        c = stream.GetI2();
+
+        mesh->mVertices[outV + 0] = vertices[a];
+        mesh->mVertices[outV + 1] = vertices[b];
+        mesh->mVertices[outV + 2] = vertices[c];
+        mesh->mNormals[outV + 0] = normals[a];
+        mesh->mNormals[outV + 1] = normals[b];
+        mesh->mNormals[outV + 2] = normals[c];
+        mesh->mTextureCoords[0][outV + 0] = uvs[a];
+        mesh->mTextureCoords[0][outV + 1] = uvs[b];
+        mesh->mTextureCoords[0][outV + 2] = uvs[c];
+        if (hasColors) {
+            mesh->mColors[0][outV + 0] = colors[a];
+            mesh->mColors[0][outV + 1] = colors[b];
+            mesh->mColors[0][outV + 2] = colors[c];
+        }
+        outV += 3;
 
         stream.GetI2(); // D?
         stream.GetI1(); // flags?
     }
+
+    // Convert everything to OpenGL space... it's the same operation as the conversion back, so we can reuse the step directly
+    MakeLeftHandedProcess convertProcess;
+    convertProcess.Execute(pScene);
+
+    FlipWindingOrderProcess flipper;
+    flipper.Execute(pScene);
 }
 
 #endif // ASSIMP_BUILD_NO_D3D_IMPORTER
