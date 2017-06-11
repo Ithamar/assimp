@@ -360,6 +360,11 @@ ADD_ASSIMP_IMPORTER( MDL
   MDLMaterialLoader.cpp
 )
 
+ADD_ASSIMP_IMPORTER( RWX
+  RWXImporter.cpp
+  RWXImporter.h
+)
+
 SET( MaterialSystem_SRCS
   MaterialSystem.cpp
   MaterialSystem.h
