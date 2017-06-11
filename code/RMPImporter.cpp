@@ -49,6 +49,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // internal headers
 #include "RMPImporter.h"
+#include "ConvertToLHProcess.h"
 #include "StreamReader.h"
 #include <memory>
 #include <assimp/IOSystem.hpp>
@@ -109,7 +110,7 @@ void RMPImporter::InternReadFile( const std::string& pFile,
 
     long count = stream.GetI4();
     bool hasColors = false;
-    if (count == 0xffffffff) {
+    if (count == -1) {
         count = stream.GetI4();
 	hasColors = true;
     }
@@ -128,74 +129,94 @@ void RMPImporter::InternReadFile( const std::string& pFile,
     pScene->mRootNode->mMeshes[2] = 2;
     pScene->mRootNode->mMeshes[3] = 3;
 
+    std::vector<aiVector3D> vertices[4];
+    std::vector<aiVector3D> uvs[4];
+    std::vector<aiColor4D> colors[4];
+    std::vector<unsigned int> indices[4];
+
     for (long c = 0; c < drawChunkCount; c++) {
-      for (long p = 0; p < 4; p++) {
-          aiMesh* mesh = pScene->mMeshes[p];
-          long numQuads = stream.GetI4();
-          for (long q = 0; q < numQuads; q++) {
-              stream.GetF4(); // PX
-              stream.GetF4(); // PY
-              stream.GetF4(); // PZ
-              stream.GetF4(); // U
-              stream.GetF4(); // V
-              if (hasColors) {
-                  stream.GetI4(); // color
-	      }
-              stream.GetI4(); // A1
-              stream.GetI4(); // B1
-              stream.GetI4(); // C1
-              stream.GetI4(); // A2
-              stream.GetI4(); // B2
-              stream.GetI4(); // C2
-	  }
-      }
+        for (long p = 0; p < 4; p++) {
+            long numQuads = stream.GetI4();
+            for (long q = 0; q < numQuads; q++) {
+                long vOff = vertices[p].size();
+                for (long v = 0; v < 4; v++) {
+                    aiVector3D vertex, uv;
+		    aiColor4D color;
+
+                    vertex.x = stream.GetF4();
+                    vertex.y = stream.GetF4();
+                    vertex.z = stream.GetF4();
+		    vertices[p].push_back(vertex);
+
+                    uv.x = stream.GetF4();
+                    uv.y = stream.GetF4();
+		    uvs[p].push_back(uv);
+
+                    if (hasColors) {
+                        unsigned long hex = stream.GetI4(); // color
+		        color.b = ((hex >>  0) & 0xff) / 255.0;
+		        color.r = ((hex >>  8) & 0xff) / 255.0;
+		        color.g = ((hex >> 16) & 0xff) / 255.0;
+			printf("%lx: %g,%g,%g\n", hex, color.r, color.g, color.b);
+		        color.a = 1;
+			colors[p].push_back(color);
+	            }
+		}
+		// 2x triangle => 1 quad
+                indices[p].push_back( vOff + stream.GetI4() );
+                indices[p].push_back( vOff + stream.GetI4() );
+                indices[p].push_back( vOff + stream.GetI4() );
+                indices[p].push_back( vOff + stream.GetI4() );
+                indices[p].push_back( vOff + stream.GetI4() );
+                indices[p].push_back( vOff + stream.GetI4() );
+	    }
+        }
     }
 
-    aiMesh *mesh = new aiMesh;
-    mesh->mNumVertices = verticeCount;
-    mesh->mVertices = new aiVector3D[verticeCount];
-    mesh->mNormals = new aiVector3D[verticeCount];
-    mesh->mNumUVComponents[0] = 2;
-    mesh->mTextureCoords[0] = new aiVector3D[verticeCount];
-    if (hasColors)
-      mesh->mColors[0] = new aiColor4D[verticeCount];
+    for (long m = 0; m < 4; m++) {
+        aiMesh *mesh = pScene->mMeshes[m];
+        mesh->mNumFaces = indices[m].size() / 3;
+        mesh->mFaces = new aiFace[mesh->mNumFaces];
+	mesh->mNumVertices = indices[m].size();
+	mesh->mVertices = new aiVector3D[mesh->mNumVertices];
+        mesh->mNumUVComponents[0] = 2;
+        mesh->mTextureCoords[0] = new aiVector3D[mesh->mNumVertices];
+        if (hasColors)
+            mesh->mColors[0] = new aiColor4D[mesh->mNumVertices];
 
-    for (long v = 0; v < verticeCount; v++) {
-        mesh->mVertices[v].x = stream.GetF4();
-        mesh->mVertices[v].y = stream.GetF4();
-        mesh->mVertices[v].z = stream.GetF4();
+	long outV = 0;
+        for (long f = 0; f < mesh->mNumFaces; f++) {
+            mesh->mFaces[f].mNumIndices = 3;
+            mesh->mFaces[f].mIndices = new unsigned int[3];
+            mesh->mFaces[f].mIndices[0] = outV + 0;
+            mesh->mFaces[f].mIndices[1] = outV + 1;
+            mesh->mFaces[f].mIndices[2] = outV + 2;
 
-        mesh->mNormals[v].x = stream.GetF4();
-        mesh->mNormals[v].y = stream.GetF4();
-        mesh->mNormals[v].z = stream.GetF4();
-
-        mesh->mTextureCoords[0][v].x = stream.GetF4();
-        mesh->mTextureCoords[0][v].y = stream.GetF4();
-
-        if (hasColors) {
-          mesh->mColors[0][v].r = stream.GetF4();
-          mesh->mColors[0][v].g = stream.GetF4();
-          mesh->mColors[0][v].b = stream.GetF4();
-          mesh->mColors[0][v].a = stream.GetF4();
+            unsigned int a, b, c;
+	    a = indices[m][f*3 + 0];
+	    b = indices[m][f*3 + 1];
+	    c = indices[m][f*3 + 2];
+            mesh->mVertices[outV + 0] = vertices[m][a];
+            mesh->mVertices[outV + 1] = vertices[m][b];
+            mesh->mVertices[outV + 2] = vertices[m][c];
+            mesh->mTextureCoords[0][outV + 0] = uvs[m][a];
+            mesh->mTextureCoords[0][outV + 1] = uvs[m][b];
+            mesh->mTextureCoords[0][outV + 2] = uvs[m][c];
+            if (hasColors) {
+                mesh->mColors[0][outV + 0] = colors[m][a];
+                mesh->mColors[0][outV + 1] = colors[m][b];
+                mesh->mColors[0][outV + 2] = colors[m][c];
+            }
+            outV += 3;
 	}
-
-        stream.GetI1(); // flags?
     }
 
-    mesh->mNumFaces = faceCount;
-    mesh->mFaces = new aiFace[faceCount];
+    // Convert everything to OpenGL space... it's the same operation as the conversion back, so we can reuse the step directly
+    MakeLeftHandedProcess convertProcess;
+    convertProcess.Execute(pScene);
 
-    for (long t = 0; t < faceCount; t++) {
-        mesh->mFaces[t].mNumIndices = 3;
-        mesh->mFaces[t].mIndices = new unsigned int[3];
-
-        mesh->mFaces[t].mIndices[0] = stream.GetI2();
-        mesh->mFaces[t].mIndices[1] = stream.GetI2();
-        mesh->mFaces[t].mIndices[2] = stream.GetI2();
-
-        stream.GetI2(); // D?
-        stream.GetI1(); // flags?
-    }
+    FlipWindingOrderProcess flipper;
+    flipper.Execute(pScene);
 }
 
 #endif // ASSIMP_BUILD_NO_RMP_IMPORTER

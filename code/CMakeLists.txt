@@ -685,6 +685,11 @@ ADD_ASSIMP_IMPORTER( D3D
   D3DImporter.h
 )
 
+ADD_ASSIMP_IMPORTER( RMP
+  RMPImporter.cpp
+  RMPImporter.h
+)
+
 SET( Step_SRCS
   StepExporter.h
   StepExporter.cpp
