@@ -363,6 +363,8 @@ ADD_ASSIMP_IMPORTER( MDL
 ADD_ASSIMP_IMPORTER( RWX
   RWXImporter.cpp
   RWXImporter.h
+  RWXParser.cpp
+  RWXParser.h
 )
 
 SET( MaterialSystem_SRCS

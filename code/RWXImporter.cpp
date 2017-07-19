@@ -49,9 +49,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // internal headers
 #include "RWXImporter.h"
-#include "ParsingUtils.h"
-#include "fast_atof.h"
+#include "RWXParser.h"
 #include <memory>
+#include <map>
 #include <assimp/IOSystem.hpp>
 #include <assimp/scene.h>
 #include <assimp/DefaultLogger.hpp>
@@ -122,185 +122,50 @@ void RWXImporter::InternReadFile( const std::string& pFile,
     TextFileToBuffer(file.get(),mBuffer2);
     const char* buffer = &mBuffer2[0];
 
-    std::vector<aiVector3D> vertices;
-    std::vector<aiVector3D> uvs;
-    std::vector<unsigned int> indices;
-    float ambient = 1, diffuse = 1, specular = 1;
-    aiColor4D color(1,1,1,1);
-    aiString textureDiffuse;
-    aiString textureBump;
-
-    char line[4096];
-    std::string token;
-    while(GetNextLine(buffer,line)) {
-      const char* sz = line;
-      // If line is empty or we hit '#' skip line
-      if (!SkipSpacesAndLineEnd(&sz) || *sz == '#')
-        continue;
-      if (TokenMatchI(sz, "modelbegin", 10) || TokenMatchI(sz, "modelend", 8)) {
-        // ignore, they have no function and are optional
-      } else if (TokenMatchI(sz, "clumpbegin", 10)) {
-        // no arguments
-      } else if (TokenMatchI(sz, "clumpend", 8)) {
-        // no arguments
-      } else if (TokenMatchI(sz, "surface", 7)) {
-        // ambient diffuse specular
-	ai_real a, d, s;
-        sz = fast_atoreal_move<ai_real>(sz,a); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,d); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,s); SkipSpaces(&sz);
-        ambient = a; diffuse = d; specular = s;
-        printf("surface %f %f %f\n", a, d, s);
-      } else if (TokenMatchI(sz, "ambient", 7)) {
-        ai_real c;
-        sz = fast_atoreal_move<ai_real>(sz,c); SkipSpaces(&sz);
-        ambient = c;
-      } else if (TokenMatchI(sz, "diffuse", 7)) {
-        ai_real c;
-        sz = fast_atoreal_move<ai_real>(sz,c); SkipSpaces(&sz);
-        diffuse = c;
-      } else if (TokenMatchI(sz, "specular", 8)) {
-        ai_real c;
-        sz = fast_atoreal_move<ai_real>(sz,c); SkipSpaces(&sz);
-        specular = c;
-      } else if (TokenMatchI(sz, "color", 5)) {
-	ai_real r, g, b;
-        sz = fast_atoreal_move<ai_real>(sz,r); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,g); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,b); SkipSpaces(&sz);
-        color = aiColor4D(r,g,b, 1);
-        printf("color %f %f %f\n", r, g, b);
-      } else if (TokenMatchI(sz, "vertex", 6)) {
-	ai_real x, y, z;
-        sz = fast_atoreal_move<ai_real>(sz,x); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,y); SkipSpaces(&sz);
-	sz = fast_atoreal_move<ai_real>(sz,z); SkipSpaces(&sz);
-	vertices.push_back(aiVector3D(x,y,z));
-        printf("vertex %f %f %f", x, y, z);
-        if (TokenMatchI(sz, "uv", 2)) {
-          ai_real u, v;
-	  sz = fast_atoreal_move<ai_real>(sz,u); SkipSpaces(&sz);
-	  sz = fast_atoreal_move<ai_real>(sz,v); SkipSpaces(&sz);
-	  uvs.push_back(aiVector3D(u,v,0));
-          printf("uv %f %f", u, v);
-	}
-        printf("\n");
-        // prelight extension?
-      } else if (TokenMatchI(sz, "geometrysampling", 16)) {
-        std::string mode = GetNextToken(sz);
-        // solid, wireframe, pointcloud
-	// XXX handle wireframe?
-      } else if (TokenMatchI(sz, "triangle", 7)) {
-	indices.push_back( strtoul10(sz,&sz) ); SkipSpaces(&sz);
-	indices.push_back( strtoul10(sz,&sz) ); SkipSpaces(&sz);
-	indices.push_back( strtoul10(sz,&sz) ); SkipSpaces(&sz);
-        if (TokenMatchI(sz, "tag", 3)) {
-          /*unsigned int tag = */strtoul10(sz,&sz); SkipSpaces(&sz);
-	  // XXX store tag as material?
-	}
-      } else if (TokenMatchI(sz, "block", 5)) {
-        ai_real width, height, depth;
-        sz = fast_atoreal_move<ai_real>(sz,width);  SkipSpaces(&sz);
-        sz = fast_atoreal_move<ai_real>(sz,height); SkipSpaces(&sz);
-        sz = fast_atoreal_move<ai_real>(sz,depth);  SkipSpaces(&sz);
-	// TODO block
-      } else if (TokenMatchI(sz, "hemisphere", 10)) {
-        ai_real radius, density;
-        sz = fast_atoreal_move<ai_real>(sz,radius);  SkipSpaces(&sz);
-        sz = fast_atoreal_move<ai_real>(sz,density); SkipSpaces(&sz);
-        // TODO hemisphere
-      } else if (TokenMatchI(sz, "quad", 4)) {
-        // Quad v1 v2 v3 v4 [UV u v] [Tag value]
-	unsigned long v1, v2, v3, v4;
-	v1 = strtoul10(sz,&sz); SkipSpaces(&sz);
-	v2 = strtoul10(sz,&sz); SkipSpaces(&sz);
-	v3 = strtoul10(sz,&sz); SkipSpaces(&sz);
-	v4 = strtoul10(sz,&sz); SkipSpaces(&sz);
-        printf("quad %lu %lu %lu %lu", v1, v2, v3, v4);
-        // generate two triangles...
-	indices.push_back(v1); indices.push_back(v2); indices.push_back(v3);
-	indices.push_back(v3); indices.push_back(v4); indices.push_back(v1);
-        if (TokenMatchI(sz, "uv", 2)) {
-          ai_real u, v;
-	  sz = fast_atoreal_move<ai_real>(sz,u); SkipSpaces(&sz);
-	  sz = fast_atoreal_move<ai_real>(sz,v); SkipSpaces(&sz);
-          printf(" uv %f %f", u, v);
-          // TODO uv for quads
-	}
-        if (IsNumeric(*sz)) {
-          unsigned long tag;
-	  tag = strtoul10(sz,&sz); SkipSpaces(&sz);
-          printf("tag %lu", tag);
-	  // XXX store tag as material?
-	}
-        printf("\n");
-      } else if (TokenMatchI(sz, "texturemode", 11) || TokenMatchI(sz, "texturemodes", 12)) {
-        // lit (default), foreshorten, or filter (or NULL)
-	printf("texturemode[s] %s\n", GetNextToken(sz).c_str());
-      } else if (TokenMatchI(sz, "texture", 7)) {
-        textureDiffuse = (GetNextToken(sz) + ".jpg").c_str();
-        printf("texture %s", textureDiffuse.C_Str());
-        if (TokenMatchI(sz, "mask", 4)) {
-          printf(" mask %s", GetNextToken(sz).c_str());
-	} else if (TokenMatchI(sz, "bump", 4)) {
-          textureBump = GetNextToken(sz).c_str();
-          printf(" bump %s", textureBump.C_Str());
-	}
-        printf("\n");
-      } else if (TokenMatchI(sz, "lightsampling", 13)) {
-        std::string mode = GetNextToken(sz);
-        // facet (default) or vertex
-      } else if (TokenMatchI(sz, "hints", 5)) {
-        // Not supported by ActiveWorlds browsers....
-      } else if (TokenMatchI(sz, "axisalignment", 13)) {
-        // zorientx, zorienty or none
-        std::string mode = GetNextToken(sz);
-      } else {
-        printf("Unknown token '%s'!\n", GetNextToken(sz).c_str());
-      }
-    }
+    RWXParser parser(buffer);
+    parser.Parse();
 
     pScene->mRootNode = new aiNode();
     pScene->mRootNode->mName.Set("<RWXRoot>");
     pScene->mRootNode->mNumMeshes = 1;
     pScene->mRootNode->mMeshes = new unsigned int [pScene->mRootNode->mNumMeshes];
     pScene->mRootNode->mMeshes[0] = 0;
-
+/*
     // generate mesh
     pScene->mNumMeshes = 1;
     pScene->mMeshes = new aiMesh*[pScene->mNumMeshes];
     aiMesh* mesh = new aiMesh();
     pScene->mMeshes[0] = mesh;
-    mesh->mNumVertices = indices.size();
-    mesh->mVertices = new aiVector3D[mesh->mNumVertices];
-    mesh->mNumFaces = indices.size() / 3;
+    mesh->mNumFaces = o.geo.indices.size() / 3;
     aiFace* faces = new aiFace [mesh->mNumFaces];
     mesh->mFaces = faces;
-    if (uvs.size()) {
-      mesh->mNumUVComponents[0] = 2;
-      mesh->mTextureCoords[0] = new aiVector3D[indices.size()];
+    mesh->mNumVertices = o.outVertices;
+    mesh->mVertices = new aiVector3D[mesh->mNumVertices];
+    if (o.geo.uvs.size()) {
+        mesh->mNumUVComponents[0] = 2;
+        mesh->mTextureCoords[0] = new aiVector3D[mesh->mNumVertices];
     }
     unsigned int vIdx = 0;
     for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
-      unsigned int a = indices[i*3+0] -1,
-		   b = indices[i*3+1] -1,
-		   c = indices[i*3+2] -1;
+        unsigned int a = o.geo.indices[i*3+0] -1,
+                     b = o.geo.indices[i*3+1] -1,
+                     c = o.geo.indices[i*3+2] -1;
 
-      faces->mNumIndices = 3;
-      faces->mIndices = new unsigned int[3];
-      faces->mIndices[0] = vIdx +0;
-      faces->mIndices[1] = vIdx +1;
-      faces->mIndices[2] = vIdx +2;
-      ++faces;
-      mesh->mVertices[vIdx+0] = vertices[a];
-      mesh->mVertices[vIdx+1] = vertices[b];
-      mesh->mVertices[vIdx+2] = vertices[c];
-      if (uvs.size()) {
-        mesh->mTextureCoords[0][vIdx+0] = uvs[a];
-        mesh->mTextureCoords[0][vIdx+1] = uvs[b];
-        mesh->mTextureCoords[0][vIdx+2] = uvs[c];
-      }
-      vIdx += 3;
+        faces->mNumIndices = 3;
+        faces->mIndices = new unsigned int[3];
+        faces->mIndices[0] = vIdx +0;
+        faces->mIndices[1] = vIdx +1;
+        faces->mIndices[2] = vIdx +2;
+        ++faces;
+        mesh->mVertices[vIdx+0] = o.geo.vertices[a];
+        mesh->mVertices[vIdx+1] = o.geo.vertices[b];
+        mesh->mVertices[vIdx+2] = o.geo.vertices[c];
+        if (o.geo.uvs.size()) {
+            mesh->mTextureCoords[0][vIdx+0] = o.geo.uvs[a];
+            mesh->mTextureCoords[0][vIdx+1] = o.geo.uvs[b];
+            mesh->mTextureCoords[0][vIdx+2] = o.geo.uvs[c];
+        }
+        vIdx += 3;
     }
 
     // generate material
@@ -309,16 +174,16 @@ void RWXImporter::InternReadFile( const std::string& pFile,
     aiMaterial* pcMat = new aiMaterial();
     pScene->mMaterials[0] = pcMat;
     // set material textures
-    if (textureDiffuse.length) pcMat->AddProperty( &textureDiffuse, AI_MATKEY_TEXTURE_DIFFUSE(0));
-    if (textureBump.length) pcMat->AddProperty( &textureBump, AI_MATKEY_TEXTURE_NORMALS(0));
+    if (mat.textureDiffuse.length) pcMat->AddProperty( &mat.textureDiffuse, AI_MATKEY_TEXTURE_DIFFUSE(0));
+    if (mat.textureBump.length) pcMat->AddProperty( &mat.textureBump, AI_MATKEY_TEXTURE_NORMALS(0));
     // set material colors
-    aiColor4D diff(color.r * diffuse, color.g * diffuse, color.b * diffuse, 1);
+    aiColor4D diff(mat.color.r * mat.diffuse, mat.color.g * mat.diffuse, mat.color.b * mat.diffuse, 1);
     pcMat->AddProperty(&diff, 1, AI_MATKEY_COLOR_DIFFUSE);
-    aiColor4D amb(color.r * ambient, color.g * ambient, color.b * ambient, 1);
+    aiColor4D amb(mat.color.r * mat.ambient, mat.color.g * mat.ambient, mat.color.b * mat.ambient, 1);
     pcMat->AddProperty(&amb, 1, AI_MATKEY_COLOR_AMBIENT);
-    aiColor4D spec(color.r * specular, color.g * specular, color.b * specular, 1);
+    aiColor4D spec(mat.color.r * mat.specular, mat.color.g * mat.specular, mat.color.b * mat.specular, 1);
     pcMat->AddProperty(&amb, 1, AI_MATKEY_COLOR_SPECULAR);
-
+*/
 }
 
 #endif // !! ASSIMP_BUILD_NO_RWX_IMPORTER
